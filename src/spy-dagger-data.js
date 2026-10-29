@@ -5,10 +5,10 @@ import {cutClipSample,rushClipSample} from './spy-dagger-timing.js';
 
 export const SPY_DAGGER_ITEM = Object.freeze({key:2000006,nativeType:24,power:12.2,range:250,moveSpeedRate:1.2,attackMoveSpeedRate:1.2});
 export const SPY_DAGGER_DIRECTIONS = Object.freeze(['front','rightFront','right','rightBack','back','leftBack','left','leftFront']);
-// Preserve the already compared S5 presentation mapping (direction-clips.js).
-// Diagonal labels reverse at the imported-rig boundary; lateral labels do not.
-// Keep this explicit rather than deriving locomotion from the attack script.
-export const SPY_DAGGER_DIRECTIONAL_MAPPING = Object.freeze({front:'FRONT',rightFront:'LEFT_FRONT',right:'RIGHT',rightBack:'LEFT_BACK',back:'BACK',leftBack:'RIGHT_BACK',left:'LEFT',leftFront:'RIGHT_FRONT'});
+// CRunState: m_eSubState indexes the Lua anim list directly, and LEFT
+// means cross(actorDir, moveDir).y < 0, i.e. the actor's own left. The
+// earlier S5 diagonal swap (S5Runtime comparison) is dropped.
+export const SPY_DAGGER_DIRECTIONAL_MAPPING = Object.freeze({front:'FRONT',rightFront:'RIGHT_FRONT',right:'RIGHT',rightBack:'RIGHT_BACK',back:'BACK',leftBack:'LEFT_BACK',left:'LEFT',leftFront:'LEFT_FRONT'});
 const directionalMapping = source => Object.freeze(Object.fromEntries(SPY_DAGGER_DIRECTIONS.map(d=>[d,source[SPY_DAGGER_DIRECTIONAL_MAPPING[d]]])));
 export const SPY_DAGGER_SOURCE_RUN = Object.freeze({
   upper:Object.freeze({FRONT:'SN004',LEFT_FRONT:'SN005',LEFT:'SN006',RIGHT_FRONT:'SN007',RIGHT:'SN008',BACK:'SN009',LEFT_BACK:'SN010',RIGHT_BACK:'SN011'}),

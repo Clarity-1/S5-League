@@ -6,7 +6,7 @@ export const GAME_ESCAPE_ASSETS = Object.freeze({
 
 export function installGameEscapeMenu({
   document: doc = globalThis.document, onResume = () => {},
-  onLeave = () => {}, onSound = () => {}, leaveLabel = 'Leave room', training = null, weaponEffects = null,
+  onLeave = () => {}, onSound = () => {}, leaveLabel = 'Leave room', training = null, weaponEffects = null, onSettings = null,
 } = {}) {
   if (!doc?.createElement || !doc.body?.append) throw new TypeError('Game menu requires a document body');
   const root = doc.createElement('section');
@@ -46,6 +46,8 @@ export function installGameEscapeMenu({
   }
   const resume = button('resume', 'Resume');
   const effectsButton = weaponEffects ? button('effects', 'Weapon effects') : null;
+  // Opens the game's full Settings view; the owner hides this menu meanwhile.
+  const settingsButton = onSettings ? button('settings', 'Settings') : null;
   const leave = button('leave', leaveLabel);
   root.append(content);
   doc.body.append(root);
@@ -84,7 +86,7 @@ export function installGameEscapeMenu({
   const effectView=weaponEffects?installGameWeaponEffects(content,{document:doc,...weaponEffects,onBack:()=>back()}):null;
   function back(){if(!effectView?.opened)return false;effectView.close();identity.hidden=false;buttons.hidden=false;root.className='game-escape-menu';syncTraining();effectsButton.focus();return true;}
   function openEffects(){effectView.open();identity.hidden=true;buttons.hidden=true;if(trainingPanel)trainingPanel.hidden=true;root.className='game-escape-menu game-escape-effects-open';effectView.focusables()[0].focus();}
-  const eligible = () => effectView?.opened?effectView.focusables():[...(resume.disabled?[]:[resume]),...(effectsButton?[effectsButton]:[]),leave,...(trainingPanel&&!trainingPanel.hidden?[trainingWeapon,trainingBehavior].filter(select=>!select.disabled):[])];
+  const eligible = () => effectView?.opened?effectView.focusables():[...(resume.disabled?[]:[resume]),...(effectsButton?[effectsButton]:[]),...(settingsButton?[settingsButton]:[]),leave,...(trainingPanel&&!trainingPanel.hidden?[trainingWeapon,trainingBehavior].filter(select=>!select.disabled):[])];
 
   function open({ canResume = true } = {}) {
     if (disposed) return false;
@@ -128,12 +130,14 @@ export function installGameEscapeMenu({
     // Owner closes only after accepting the action; rejected resume keeps its menu.
     if (action === 'resume') onResume();
     else if(action==='effects')openEffects();
+    else if(action==='settings')onSettings();
     else onLeave();
   }
   bind(resume, 'click', () => activate('resume'));
   bind(leave, 'click', () => activate('leave'));
   if(effectsButton)bind(effectsButton,'click',()=>activate('effects'));
-  for (const node of [resume,...(effectsButton?[effectsButton]:[]),leave]) bind(node, 'pointerenter', () => {
+  if(settingsButton)bind(settingsButton,'click',()=>activate('settings'));
+  for (const node of [resume,...(effectsButton?[effectsButton]:[]),...(settingsButton?[settingsButton]:[]),leave]) bind(node, 'pointerenter', () => {
     if (opened && !disposed && !node.disabled) onSound('hover');
   });
   function keyEvent(event) {

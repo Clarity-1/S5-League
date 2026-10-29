@@ -1,5 +1,6 @@
 import {BASE_FOV} from './input.js';
 import {CANNONADE_ZOOM} from './cannonade-runtime.js';
+import {normalFov} from './camera-fov.js';
 
 // Native766237/766622..766672: float32 tick amount, response and lerp.
 // The live bootstrap supplies a float64 millisecond delta at76620D rather
@@ -21,14 +22,15 @@ export function advanceCannonadeCamera(camera,state,tickAmount,zoomed){
  if(zoomed!==state.zoomed){state.zoomed=zoomed;state.firstTick=zoomed;state.returning=!zoomed;}
  if(!zoomed&&!state.returning)return false;
  if(!Number.isFinite(tickAmount)||tickAmount<=0)return true;
- const target=zoomed?(state.firstTick?CANNONADE_CAMERA.initialTarget:CANNONADE_CAMERA.target):CANNONADE_CAMERA.rest;
+ // Zoom-out returns to the FOV setting (CANNONADE_CAMERA.rest is its default).
+ const rest=normalFov(),target=zoomed?(state.firstTick?CANNONADE_CAMERA.initialTarget:CANNONADE_CAMERA.target):rest;
  const response=zoomed?CANNONADE_CAMERA.enterResponse:CANNONADE_CAMERA.exitResponse;
  const previous=camera.fov,next=nativeCameraAngleStep(previous,target,Math.min(1,tickAmount),response);
  if(next!==camera.fov){camera.fov=next;camera.updateProjectionMatrix();}
  state.firstTick=false;
  // Float32 lerp can settle a few ULPs below90 at high render rates. End its
  // ownership at that fixed point so ordinary sprint camera control can resume.
- if(!zoomed&&(next===CANNONADE_CAMERA.rest||next===previous))state.returning=false;
+ if(!zoomed&&(next===rest||next===previous))state.returning=false;
  return true;
 }
 export function updateCannonadeFov(camera,state,dt,zoomed){

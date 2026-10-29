@@ -43,7 +43,7 @@ import {MotionGraph} from './motion-graph.js';
 import {SPRINT_STYLES,sprintStyle} from './anime-sprint.js';
 import {installLocomotionSettings} from './locomotion-settings.js';
 import {RUN_STYLES,runStyle,IDLE_STYLES,idleStyle,MIXAMO_CLIP_LABELS} from './mixamo-locomotion.js';
-import {BASE_FOV} from './input.js';
+import {BASE_FOV,CAMERA_NEAR} from './input.js';
 import {BoundMovementInput,createGameInputBindings,GAME_INPUT_COMMANDS,gameInputReservations,gameInputHint} from './game-input-bindings.js';
 import {GamepadInput} from './gamepad-input.js';
 import {usesTouchControls} from './touch-input.js';
@@ -90,7 +90,9 @@ import {meleeActivations,claimMeleeActivation} from './melee-activations.js';
 import {SimulationClock,SIM_STEP_MS} from './simulation-clock.js';
 import {PoseBuffer} from './pose-buffer.js';
 import {presentationFacing,setAvatarFacing} from './view-orientation.js';
-import {ThirdPersonCamera,CAMERA_FRAMING} from './camera-rig.js';
+import {ThirdPersonCamera,CAMERA_FRAMING,FOLLOW_CAMERA,clampCameraPitch} from './camera-rig.js';
+import {setNormalFov} from './camera-fov.js';
+import {createFollowShadow} from './follow-shadow.js';
 import {updateSprintFov} from './sprint-camera.js';
 import {WallContactEffect} from './wall-contact-effect.js';
 import {DashEffect} from './dash-effect.js';
@@ -236,11 +238,12 @@ renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;
 renderer.outputColorSpace=THREE.SRGBColorSpace;
 renderer.toneMapping=THREE.NeutralToneMapping;renderer.toneMappingExposure=1;
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x75caff);scene.fog=new THREE.Fog(0x9ad4f7,50,140);
-const camera=new THREE.PerspectiveCamera(BASE_FOV,innerWidth/innerHeight,.08,200);
+const camera=new THREE.PerspectiveCamera(BASE_FOV,innerWidth/innerHeight,CAMERA_NEAR,200);
 const cannonadeCamera=createCannonadeCameraState();
 scene.add(new THREE.HemisphereLight(0xe5f5ff,0x7183a2,1.35));
 const sun=new THREE.DirectionalLight(0xfff0d4,2.1);sun.position.set(-15,30,20);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
 Object.assign(sun.shadow.camera,{left:-28,right:28,top:30,bottom:-28,near:1,far:90});sun.shadow.normalBias=.025;scene.add(sun);
+const followShadow=createFollowShadow(sun);
 const qaParams=new URLSearchParams(location.search),qaScenario=qaParams.get('qa');
 let effectStorage=null;try{effectStorage=localStorage;}catch{}
 const weaponEffectSettings=createWeaponEffectSettings({storage:effectStorage,overrides:qaParams.get('vfx')??''});
@@ -429,6 +432,8 @@ function activatePresentation(key){
   entry.lighting=captureLighting();entry.surface=captureMapSurface(scene);
  }else world.resumePresentation?.();
  restoreLighting(entry.lighting);graphicsPresentation=entry.presentation;
+ // Station 2 bakes its scenery shadow for one fixed sun box; others follow the view.
+ followShadow.enabled=key!=='station2-modular';
  applyShadowBudget(renderer,sun,renderQuality,shadowsEnabled);graphicsPresentation.setQuality?.(renderQuality);
  graphicsPresentation.resize(innerWidth,innerHeight);camera.far=world.cameraFar||200;camera.updateProjectionMatrix();
 }
@@ -502,6 +507,8 @@ const controller=new Controller(world,loadout);
 if(Number.isFinite(world.previewFacing))controller.facing=world.previewFacing;
 installCollisionV2TestControls(controller);
 const presentationSettings=installPresentationSettings({
+ // Apply at once (no easing), unless a sprint or weapon zoom currently owns the angle.
+ onFov:value=>{const fov=setNormalFov(value);if(!controller.sprinting&&!controller.cannonade?.zoom&&!controller.rifle?.zoom){camera.fov=fov;camera.updateProjectionMatrix();}},
  onRenderQuality:value=>{
   renderQuality=value;renderer.setPixelRatio(renderPixelRatio(value,innerWidth,innerHeight,devicePixelRatio));renderer.setSize(innerWidth,innerHeight);
   applyShadowBudget(renderer,sun,value,shadowsEnabled);graphicsPresentation.setQuality?.(value);graphicsPresentation.resize(innerWidth,innerHeight);
@@ -520,7 +527,7 @@ if(world.name){document.querySelector('.eyebrow').textContent=world.name+' / TRA
 const motionGraph=new MotionGraph();
 let locomotionSettings=null;
 {
- let saved='anime';try{saved=localStorage.getItem('air-dagger-sprint-style')||saved;}catch{}
+ let saved='classic';try{saved=localStorage.getItem('air-dagger-sprint-style')||saved;}catch{}
  motionGraph.sprintStyle=sprintStyle(qaParams.get('sprintStyle')||saved);
  const label=document.createElement('label');label.textContent='Sprint animation · F3';
  const select=document.createElement('select');select.id='sprint-style';select.setAttribute('aria-label','Sprint animation');
@@ -567,7 +574,7 @@ locomotionSettings=installLocomotionSettings($('graphics-settings'));
 const auraSettingsControls=installWeaponAuraControls($('graphics-settings'),{document,settings:weaponEffectSettings});
 window.addEventListener('pagehide',event=>{if(!event.persisted)auraSettingsControls.dispose();});
 
- let avatar=null,weaponTrail=null,dashEffect=null,sprintEffect=null,poseBuffer=null,active=false,lab=false,yaw=Number.isFinite(world.previewFacing)?world.previewFacing-Math.PI:['station2','station2-modular'].includes(qaParams.get('scene'))?Math.PI:0,pitch=.17,last=performance.now(),animOverride=chosenWeapon.idle,animationSpeed=1;
+ let avatar=null,weaponTrail=null,dashEffect=null,sprintEffect=null,poseBuffer=null,active=false,lab=false,yaw=Number.isFinite(world.previewFacing)?world.previewFacing-Math.PI:['station2','station2-modular'].includes(qaParams.get('scene'))?Math.PI:0,pitch=FOLLOW_CAMERA.initialPitch,last=performance.now(),animOverride=chosenWeapon.idle,animationSpeed=1;
 const simulationClock=new SimulationClock();
 const controls=new BoundMovementInput(inputBindings,{onEdge:event=>{if(inputObservations){inputObservations.edges.push(event);if(inputObservations.edges.length>64)inputObservations.edges.shift();}if(event.edge==='press'&&/^weapon[123]$/.test(event.command)&&hasPlayerControl())selectWeaponSlot(Number(event.command.at(-1))-1);}});
 const roomLifecycle=createWaitingRoomLifecycle();
@@ -753,6 +760,9 @@ async function startWaitingRoomMatch(){
  }catch(error){roomLifecycle.startFailed(request.token);waitingRoom.show();waitingRoom.setMenuOpen(!$('welcome').hidden);throw error;}
  finally{roomStartRequest=false;}
 }
+// Lobby screen to return to when Settings closes.
+const SETTINGS_RETURN_ROUTES=['ready-lobby','equipment','preparation','room','motion'];
+let settingsReturnRoute='ready-lobby';
 const entryShell=installS5EntryShell({host:$('welcome'),menuLayout,onPlay:()=>$('play').click(),
  onSound:phase=>{void interfaceAudio.notify({kind:'s5-lobby-presentation',phase});},
  getLobbyContext:()=>({rosterKind:gameMode==='battleroyal'&&world.nativeMapId!==46?'individual':'teams',mode:world.nativeMapId===46?'Conquest · 8 waves':gameMode,sceneKey:$('scene-select').value,map:$('scene-select').selectedOptions[0]?.textContent||world.name||'Map',nativeMapId:world.nativeMapId??null,rules:($('practice-option').closest('label').hidden?$('match-option'):$('practice-option')).selectedOptions[0]?.textContent||'Default rules',team:$('team-select').selectedOptions[0]?.textContent||'—',controlLabels:[1,2,3].map(slot=>inputBindings.get('weapon'+slot).bindingLabel)}),
@@ -760,11 +770,13 @@ const entryShell=installS5EntryShell({host:$('welcome'),menuLayout,onPlay:()=>$(
  onRetry:retryEntryPlay,
  beforeNavigate({from,to}){
   inputSettings?.cancel();
+  if(to==='settings'&&SETTINGS_RETURN_ROUTES.includes(from))settingsReturnRoute=from;
   if(from==='equipment'&&to!=='equipment')cancelPendingWeapon('inventory-closed');
   if(from==='settings'&&to!=='settings'&&optionsTransaction?.snapshot().phase==='open')return optionsTransaction.cancel('s5-route-change');
   return {accepted:true};
  },beforePlay:()=>optionsPanelLifecycle?.leaveForPlay()??{accepted:true}});
-const escapeMenu=installGameEscapeMenu({onResume:resumeGameSession,onLeave:leaveGameSession,leaveLabel:'Return to room',weaponEffects:{settings:weaponEffectSettings,
+const escapeMenu=installGameEscapeMenu({onResume:resumeGameSession,onLeave:leaveGameSession,leaveLabel:'Return to room',
+ onSettings:()=>openIngameSettings(),weaponEffects:{settings:weaponEffectSettings,
  read(){const slots=weaponLoadoutSlots?.snapshot().slots??[];return {weapon:controller.weapon,busy:sessionBusy,weapons:[...new Set([controller.weapon,...slots.filter(Boolean)])].map(value=>({value,label:WEAPON_CHOICES[value].name}))};},
 },training:{
  read(){if(gameMode!=='training'||!combat)return null;return {weapon:combat.enemy.weapon,behavior:combat.mode,busy:sessionBusy,
@@ -776,6 +788,37 @@ let effectSelectionSignature=JSON.stringify(weaponEffectSettings.snapshot().sele
 weaponEffectSettings.subscribe(snapshot=>{const signature=JSON.stringify(snapshot.selections);if(signature!==effectSelectionSignature){combatEffects?.clearForAvatar(avatar);weaponTrail?.clear();}effectSelectionSignature=signature;});
 let escapeUnlockPending=false;
 function closeGameMenu(){escapeUnlockPending=false;escapeMenu.close({restoreFocus:false});document.body.classList.remove('game-menu-open');}
+// In-game Settings: reveal the lobby's own Settings section over the paused
+// match (the entry flow refuses navigation while playing). Its options
+// lifecycle opens the transaction when the panel becomes visible; any close
+// (Close, Confirm, Escape) restores the lobby state and the game menu.
+let ingameSettings=null;
+function openIngameSettings(){
+ if(ingameSettings||!escapeMenu.opened||sessionBusy)return {accepted:false,reason:'settings-unavailable'};
+ const welcome=$('welcome'),lobby=entryShell.lobby;
+ ingameSettings={hidden:welcome.hidden,inert:welcome.getAttribute('inert'),aria:welcome.getAttribute('aria-hidden'),section:lobby.element.dataset.section,
+  panels:[...document.querySelectorAll('.menu-shell [data-panel]')].map(panel=>[panel,panel.hidden])};
+ escapeMenu.close({restoreFocus:false});document.body.classList.remove('game-menu-open');document.body.classList.add('ingame-settings');
+ lobby.show('settings');
+ for(const [panel] of ingameSettings.panels)panel.hidden=panel.dataset.panel!=='settings';
+ welcome.hidden=false;welcome.removeAttribute('inert');welcome.setAttribute('aria-hidden','false');
+ optionsPanelLifecycle?.sync();
+ welcome.querySelector('[data-panel="settings"] button:not([disabled]),[data-panel="settings"] [role=tab]')?.focus();
+ return {accepted:true};
+}
+function closeIngameSettings(){
+ const state=ingameSettings;if(!state)return {accepted:false,reason:'settings-closed'};
+ ingameSettings=null;
+ if(optionsTransaction?.snapshot().phase==='open'){inputSettings?.cancel();optionsTransaction.cancel('s5-ingame-settings');}
+ const welcome=$('welcome');
+ welcome.hidden=state.hidden;if(state.inert===null)welcome.removeAttribute('inert');else welcome.setAttribute('inert',state.inert);
+ if(state.aria===null)welcome.removeAttribute('aria-hidden');else welcome.setAttribute('aria-hidden',state.aria);
+ for(const [panel,hidden] of state.panels)panel.hidden=hidden;
+ entryShell.lobby.show(state.section);document.body.classList.remove('ingame-settings');
+ optionsPanelLifecycle?.sync();
+ escapeMenu.open();document.body.classList.add('game-menu-open');
+ return {accepted:true};
+}
 function stopWeaponAudio(){const cached=typeof weaponResourceCache==='undefined'?[]:weaponResourceCache.values?.()??[];for(const player of new Set([audio,...Array.from(weaponBundles.values(),bundle=>bundle.audio),...Array.from(cached,bundle=>bundle.audio),...opponentAudio.values()]))player?.stop?.();}
 function openGameMenu({fromPointerUnlock=false}={}){
  if(!sessionReady||sessionBusy||!active||lab||!$('welcome').hidden||(world.nativeMapId===46&&conquestResultAdapter?.finished)||(touchdown||match)?.state.phase==='result')return {accepted:false,reason:'session-unavailable'};
@@ -805,7 +848,7 @@ async function leaveGameSession(){
  const switched=await switchSession();
  return {accepted:switched?.accepted===true,reason:switched?.accepted===true?'left-local-room':'room-exit-failed'};
 }
-function syncEntryShell(){entryShell.lobby.setPlayLabel(waitingRoom?.visible?'Return to room':active?((world.nativeMapId===46&&conquestResultAdapter?.finished)||(touchdown||match)?.state.phase==='result'?'View results':'Resume'):'Enter room');entryShell.sync({ready:sessionReady,busy:sessionBusy,capturing:inputCapture,playing:active&&$('welcome').hidden&&!lab,status:$('load-status').textContent});slotInventory?.sync();practiceFrustumView?.sync();}
+function syncEntryShell(){entryShell.lobby.setPlayLabel(waitingRoom?.visible?'Return to room':active?((world.nativeMapId===46&&conquestResultAdapter?.finished)||(touchdown||match)?.state.phase==='result'?'View results':'Resume'):'Enter room');entryShell.sync({ready:sessionReady,busy:sessionBusy,capturing:inputCapture,playing:active&&($('welcome').hidden||document.body.classList.contains('ingame-settings'))&&!lab,status:$('load-status').textContent});slotInventory?.sync();practiceFrustumView?.sync();}
 const sessionNavigation=installS5SessionNavigation({onReturnToLobby:()=>roomLifecycle.snapshot().joined?returnToWaitingRoom():returnSessionToLobby()});
 let restoreSessionReplay=null;
 function returnSessionToLobby(){
@@ -999,8 +1042,10 @@ window.addEventListener('pagehide',event=>{
  const jukeboxOptions=createJukeboxOptionsPort({settings:jukeboxSettings});
  optionsTransaction=createOptionsTransaction({ports:[audioOptions.port,inputOptions.port,mouseOptions.port,jukeboxOptions.port],onClose(event){
   inputSettings?.cancel();
-  // S5 routing: explicit Confirm/Cancel returns to equipment; route departures keep their destination.
-  if(!event.reason?.startsWith('s5-'))menuLayout.show('loadout');
+  if(ingameSettings){closeIngameSettings();return;}
+  // Explicit Confirm/Close returns to the screen Settings was opened from
+  // ('loadout' was the legacy Prepare match panel); route departures keep theirs.
+  if(!event.reason?.startsWith('s5-'))menuLayout.show(settingsReturnRoute);
  }});
  inputOptions.attach(optionsTransaction);mouseOptions.attach(optionsTransaction);jukeboxOptions.attach(optionsTransaction);
  const nativeHost=document.createElement('div');nativeHost.id='input-settings';slot.append(nativeHost);
@@ -1019,7 +1064,7 @@ window.addEventListener('pagehide',event=>{
  const refresh=()=>{hint.textContent=gameInputHint(inputBindings);updateWeaponHud();inputSettings.sync();};
  inputBindings.subscribe(refresh);refresh();
  optionsPanelLifecycle=installOptionsPanelLifecycle({panel:document.querySelector('[data-panel="settings"]'),menuLayout,transaction:optionsTransaction,
-  observeRoot:$('welcome'),beforeClose:()=>inputSettings.cancel(),onBlocked(){menuLayout.show('loadout');toast('Settings unavailable.');}});
+  observeRoot:$('welcome'),beforeClose:()=>inputSettings.cancel(),returnRoute:()=>settingsReturnRoute,onBlocked(){menuLayout.show(settingsReturnRoute);toast('Settings unavailable.');}});
  document.querySelector('.menu-tabs').addEventListener('click',event=>{
   if(!event.target.closest('[data-tab]'))return;
   if(event.target.closest('[data-tab]').dataset.tab!=='settings')inputSettings.cancel();
@@ -1273,7 +1318,7 @@ let gamepadSkillCode=null;
 const gamepad=new GamepadInput({controls,settings:readGamepadSettings(gamepadStorage),onAction:handleGamepadAction,onStatus:state=>{gamepadSettings.sync(state);document.documentElement.dataset.gamepad=state.status;}});
 const gamepadSettings=installGamepadSettings($('graphics-settings'),gamepad,{storage:gamepadStorage});
 let touchSkillCode=null;
-const touchControls=installTouchControls({enabled:touchMode,onLook:(deltaYaw,deltaPitch)=>{if(hasPlayerControl()){yaw+=deltaYaw;pitch=Math.max(-1.15,Math.min(1.15,pitch+deltaPitch));}},onAction:(action,pressed)=>{
+const touchControls=installTouchControls({enabled:touchMode,onLook:(deltaYaw,deltaPitch)=>{if(hasPlayerControl()){yaw+=deltaYaw;pitch=clampCameraPitch(pitch+deltaPitch);}},onAction:(action,pressed)=>{
  if(action==='primary'||action==='secondary'){gamepad.attack(action==='primary'?0:2,pressed,performance.now()/1000,'touch');return;}
  if(action==='skill'&&!pressed){if(touchSkillCode)shieldInput.up(touchSkillCode,performance.now(),'touch');touchSkillCode=null;return;}
  if(action==='scoreboard'){(touchdown||match)?.ui?.setRoster?.(pressed&&hasPlayerControl());return;}
@@ -1429,7 +1474,7 @@ const mouseLookDelta=createMouseLookDelta();
 document.addEventListener('mousemove',e=>{
  const relative=document.pointerLockElement===canvas,counts=mouseLookDelta.map(e,{active:hasControl()&&(relative||!!(e.buttons&4)),relative});
  if(!counts)return;const delta=mouseLook.map({...counts,scale:cameraDirector.cinematic?.38:1});
- if(delta.accepted){yaw+=delta.deltaYaw;pitch+=delta.deltaPitch;}
+ if(delta.accepted){yaw+=delta.deltaYaw;pitch=clampCameraPitch(pitch+delta.deltaPitch);}
 });
 window.addEventListener('blur',()=>mouseLookDelta.clear());
 window.addEventListener('keydown',e=>{
@@ -1439,6 +1484,7 @@ window.addEventListener('keydown',e=>{
   if(e.code==='Escape'&&!active&&!lab&&!$('welcome').hidden&&waitingRoom?.visible&&waitingRoom.menuOpen&&roomLifecycle.snapshot().inRoom){
     e.preventDefault();if(!e.repeat&&sessionReady&&!sessionBusy&&!$('play').disabled)$('play').click();return;
   }
+  if(ingameSettings){if(e.code==='Escape'&&!e.defaultPrevented&&!inputCapture){e.preventDefault();if(!e.repeat)closeIngameSettings();}return;}
   if(escapeMenu.opened){if(e.code==='Escape'){e.preventDefault();if(!e.repeat&&!escapeUnlockPending&&!escapeMenu.back())resumeGameSession();}return;}
   if(e.target.closest?.('input,select,textarea,[contenteditable="true"]'))return;
   if(e.code==='F9'&&performanceDebug){e.preventDefault();if(!e.repeat)capturePracticePerformance();return;}
@@ -1575,7 +1621,7 @@ function updateCamera(dt){
   const spectated=chaserSpectatorTarget(match?.state,match?.health?.dead,combat);
   const p=spectated||avatar?.group.position||controller.position;
   const distance=qaScenario&&qaParams.has('close')?2.8:lab?3.7:chaserCameraDistance(match?.state,match?.health?.dead,$('welcome').hidden)||CAMERA_FRAMING.distance;
-  cameraDirector.update(camera,{player:p,yaw,pitch,distance,obstacles:world.meshes,dt});
+  cameraDirector.update(camera,{player:p,yaw,pitch,distance,obstacles:world.meshes,collisionWorld:controller.collision.world,dt});
   if(!cameraDirector.cinematic&&!cameraDirector.free&&combat?.shake>0){
     const a=combat.shake*.12;camera.position.x+=Math.sin(performance.now()*.11)*a;camera.position.y+=Math.cos(performance.now()*.09)*a;
     cameraDirector.constrain(camera,{player:p,obstacles:world.meshes});
@@ -1591,7 +1637,7 @@ function frame(now){
   touchControls.sync({visible:!document.hidden&&!sessionBusy&&!inputCapture&&active&&!lab&&!escapeMenu.opened&&$('welcome').hidden,canPlay:hasPlayerControl()});
   const gamepadContext=inputCapture||sessionBusy||lab?'inactive':escapeMenu.opened||!$('welcome').hidden?'menu':waitingRoom?.visible&&!waitingRoom.menuOpen?'room':active&&!cameraDirector.free&&!touchdown?.locked&&!match?.locked?'game':'inactive';
   gamepad.poll((now-last)/1000,{context:gamepadContext,time:now/1000});
-  if(gamepadContext==='game'){yaw+=gamepad.look.deltaYaw;pitch=Math.max(-1.15,Math.min(1.15,pitch+gamepad.look.deltaPitch));}
+  if(gamepadContext==='game'){yaw+=gamepad.look.deltaYaw;pitch=clampCameraPitch(pitch+gamepad.look.deltaPitch);}
   if(waitingRoom?.visible){
     const roomDt=Math.min((now-last)/1000,.25);last=now;document.body.classList.remove('in-game');
     waitingRoom.frame(roomDt);
@@ -1763,7 +1809,9 @@ function frame(now){
   // The opaque preparation HUD has its own live character previews. Avoid
   // drawing the entire map, reflections, shadows and post-processing behind it.
   // Continue simulation/pose evaluation above so returning to play is immediate.
-  if($('welcome').hidden||!$('welcome').classList.contains('s5-entry-host')){
+  // In-game Settings sits over the live match: keep drawing it (FOV preview).
+  if($('welcome').hidden||!$('welcome').classList.contains('s5-entry-host')||document.body.classList.contains('ingame-settings')){
+   followShadow.update(avatar?.group.position??controller.position,cameraDirector.free?null:yaw);
    world.renderMapObjects?.(camera);graphicsPresentation.render();
    if(!escapeMenu.opened&&!roomResults?.opened){katanaScreenEffects?.render(renderer);chaserHudEffects?.render(renderer);s4TeamModeEffects?.render(renderer);if(gameMode==='captain')match?.ui.render(renderer);}
    roomResults?.render(renderer);

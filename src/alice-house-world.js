@@ -303,7 +303,6 @@ export async function loadAliceHouseWorld(scene,{previewSpawnMarker='beta_spawn_
    });
   }
   world=createAliceHouseSourceWorld(source,{previewSpawnMarker,materialsForModel,hiddenSourceModelIndices:artist.hiddenSourceModelIndices??[],mirrorX});
-  world.staticContactResponse='source';
   world.disposeSourceGeometry=world.dispose;
   world.artistConfig=artist;world.localLights=addArtistLights(world.root,artist.lighting??{},world.presentationMatrix);
   configureAliceTextureRendering(world,artist,textures);

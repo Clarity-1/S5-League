@@ -109,7 +109,10 @@ export class MovementInput {
     this.pending={};return value;
   }
 }
-// CFPSCamera projection observed in S5Runtime: m00=.5625, m11=1 at 16:9.
-// This is a 90-degree VERTICAL FOV, directly compatible with Three.js.
-export const BASE_FOV=90;
+// CFPSCamera::GetDestNormalFov: 66 for the center camera (side offset
+// 50, CAMERA_FRAMING.shoulder), 60 for the side camera. D3DX FovLH takes a
+// VERTICAL angle, like Three.js. (An S5Runtime capture showed 90 instead.)
+export const BASE_FOV=66;
+// DEFAULT_NEAR_DIST = 30 native units.
+export const CAMERA_NEAR=30*.006;
 

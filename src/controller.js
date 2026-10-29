@@ -30,7 +30,9 @@ import {flyInputMotion} from './fly-input-motion.js';
 import {applyNativePushCollision} from './native-push-collision.js';
 // Rendering-independent simulation in scene units / seconds. Source-derived
 // profile plus explicit reconstruction assumptions: see movement-profile.js.
+import {Vector3} from 'three';
 import {spyStabDelta} from './root-motion.js';
+import {SCN_SCENE_SCALE} from './s5runtime-coordinates.js';
 import {TUNING,SOURCE_MOVEMENT,locomotionTarget,groundRunTarget,WEAPON_MOVE_RATES} from './movement-profile.js';
 import {createDashMotion,advanceDashMotion} from './dash-motion.js';
 import {advancePlasmaDashExit} from './plasma-dash-transition.js';
@@ -49,11 +51,9 @@ import {createCannonadeState,advanceCannonade,cancelCannonade,CANNONADE} from '.
 import {createRocketLauncherState,advanceRocketLauncher,cancelRocketLauncher,ROCKET_LAUNCHER} from './rocket-launcher-runtime.js';
 import {chaserReloadTimeScale} from './chaser-attributes.js';
 import {EllipsoidWorld,COLLISION_SETTINGS as CONTACT} from './collision.js';
-import {NATIVE_CONTACT_MARGIN as ACTOR_CONTACT_MARGIN} from './native-collision-response.js';
-import {NATIVE_LOWER_SUPPORT_GAP} from './native-lower-support.js';
 import {createNativeCollisionMovement} from './native-collision-movement.js';
 import {createCollisionV2TestMovement} from './collision-v2-test-movement.js';
-import {createStaticContactMovement} from './static-contact-movement.js';
+import {ActorCollisionObject,actorMove,ACTOR_COLLISION,TYPE_ACTOR} from './actor-collision.js';
 import {createNativeActorCollisionFrame} from './native-actor-collision-frame.js';
 import {createNativeActorRuntimeProfile} from './native-actor-runtime-profile.js';
 import {wallJumpVelocity,WALL_REBOUND_MIN_DOT} from './wall-jump.js';
@@ -68,13 +68,16 @@ const approach=(v,t,d)=>v<t?Math.min(t,v+d):Math.max(t,v-d);
 const synchronousShieldPort=fn=>typeof fn==='function'&&!['AsyncFunction','AsyncGeneratorFunction','GeneratorFunction'].includes(fn.constructor.name);
 const daggerRushContacts=getSpyDaggerAttackProfile('rush').hits;
 const daggerCutContact=getSpyDaggerAttackProfile('cut').hits[0];
+const wallContactView=wall=>({point:new Vector3(wall.point.x,wall.point.y,wall.point.z),normal:new Vector3(wall.normal.x,0,wall.normal.z)});
+
 export class Controller {
-  constructor(world={colliders:[]},{weapon='dagger',sex='male',skill=null}={}){this.world=world;this.weapon=weapon;this.sex=sex;this.collisionV2TestEnabled=false;this.s5runtimeSkill=createS5RuntimeSkillState({itemKey:skill});this.s5runtimeShieldActorProfile=null;this.collision=new EllipsoidWorld(world.collisionWorldForActor?.(this)??world,{x:TUNING.radius,y:TUNING.height/2,z:TUNING.radius});this.reset();this.installStaticContactMovement();}
-  setWorld(world){this.releaseNativeActorFrame();this.world.sourceLaunchMotion?.releaseActor(this);this.world.mapObjects?.releaseActor?.(this);this.staticContactMovement?.dispose();this.staticContactMovement=null;this.staticContactMovementFrame=null;if(this.collisionV2TestEnabled)this.nativeCollisionMovement?.dispose?.();this.nativeCollisionMovement=null;this.nativeCollisionMovementFrame=null;this.world=world;this.collision=new EllipsoidWorld(world.collisionWorldForActor?.(this)??world,{x:TUNING.radius,y:TUNING.height/2,z:TUNING.radius});this.reset();this.installStaticContactMovement();if(this.collisionV2TestEnabled)this.setCollisionV2TestEnabled(true);}
-  installStaticContactMovement(){
-    if(this.world.staticContactResponse!=='source')return;
-    this.staticContactMovement=createStaticContactMovement(this);
-    Object.assign(this.position,this.staticContactMovement.position());
+  constructor(world={colliders:[]},{weapon='dagger',sex='male',skill=null}={}){this.world=world;this.weapon=weapon;this.sex=sex;this.collisionV2TestEnabled=false;this.s5runtimeSkill=createS5RuntimeSkillState({itemKey:skill});this.s5runtimeShieldActorProfile=null;this.collision=new EllipsoidWorld(world.collisionWorldForActor?.(this)??world,{x:TUNING.radius,y:TUNING.height/2,z:TUNING.radius});this.installCollisionBody();this.reset();}
+  setWorld(world){this.releaseNativeActorFrame();this.world.sourceLaunchMotion?.releaseActor(this);this.world.mapObjects?.releaseActor?.(this);if(this.collisionV2TestEnabled)this.nativeCollisionMovement?.dispose?.();this.nativeCollisionMovement=null;this.nativeCollisionMovementFrame=null;this.world=world;this.collision=new EllipsoidWorld(world.collisionWorldForActor?.(this)??world,{x:TUNING.radius,y:TUNING.height/2,z:TUNING.radius});this.installCollisionBody();this.reset();if(this.collisionV2TestEnabled)this.setCollisionV2TestEnabled(true);}
+  // Every map moves the player with ActorCollisionObject; radii and
+  // offset are IActor's (bound width/height * 0.5, offset bound height * 0.5).
+  installCollisionBody(){
+    const r=TUNING.radius,h=TUNING.height/2;
+    this.collisionBody=new ActorCollisionObject(this.collision,{radii:{x:r,y:h,z:r},offset:{x:0,y:h,z:0},actorBodies:()=>this.collision.actorCollisionBodies?.()??[]});
   }
   setCollisionV2TestEnabled(enabled){
     this.assertNativeActorLifecycleIdle();
@@ -233,7 +236,9 @@ export class Controller {
     this.position={...(this.world.spawn||{x:0,y:0,z:9})};this.velocity={x:0,y:0,z:0};this.grounded=true;this.groundLocomotionVelocity=null;
     this.world.sourceLaunchMotion?.resetActor(this);
     if(this.nativeCollisionMovement)this.position=this.nativeCollisionMovement.reset({position:this.position,grounded:this.grounded});
-    else if(this.staticContactMovement)this.position=this.staticContactMovement.reset({position:this.position,grounded:this.grounded});
+    this.verticalState='normal';this.maxGravityVelocity=-TUNING.terminal;this.physicalHorizontal=false;
+    if(!this.nativeCollisionMovement)this.position.y+=this.collisionBody.radii.y*ACTOR_COLLISION.epsilon;
+    this.collisionBody.setPosition(this.position);this.collisionBody.resetInfo();
     this.nativeCollisionMovementFrame=null;
     this.energy=TUNING.maxEnergy;this.sprinting=false;this.sprintBlocked=false;this.dash=0;this.dashElapsedMs=0;this.dashPhase=null;this.dashMotion=null;this.dashJumpCancelArmed=false;
     this.ironBootsCooldowns={};
@@ -245,7 +250,7 @@ export class Controller {
     this.clearPlasmaLightHandoff();
     this._inputFrameId??=0;this._inputFrameOpen??=false;this._inputFrameHadStep??=false;
     this.wallJumpAirborne=false;
-    this.jumpAirborne=false;
+    this.jumpAirborne=false;this.verticalJump=false;
     this.counterGuardDash=null;this.counterGuardDodge=false;this.counterGuardDodgeWindow=null;this.daggerSwitchRush=false;this.plasmaSwitchRush=false;this.batSwitchRush=false;this.dodgeSecondaryHandoff=null;
     this.plasmaLowerHistory=createPlasmaLowerHistory();
     this.attack=null;this.airDashUsed=false; // Diagnostic history, never an eligibility gate.
@@ -381,6 +386,9 @@ export class Controller {
   }
   setS5RuntimeSkillDiagnosticContext(context=null){this.s5runtimeSkillDiagnosticContext=context?{...context}:null;}
   setNativeJumpDiagnosticContext(context=null){if(context?.enabled===true&&this.s5runtimeAnchoringBodyState)throw Error('Anchoring and Jump body routes require separate scenarios');this.nativeJumpDiagnosticContext=context?{...context}:null;this.nativeJumpDiagnosticFrame=null;this.nativeFrameTailDiagnosticFrame=null;}
+  // CActor::GetMoveSpeedMax: actor speed with weapon/mode rates, before any
+  // direction, landing or attack rate.
+  get moveSpeedMax(){return TUNING.walk*(this.modeModifiers?.moveFactor??1)*(this.weaponMoveRate/WEAPON_MOVE_RATES.dagger);}
   get weaponMoveRate(){return this.rifle?.profile?.moveSpeedRate??this.support?.profile?.moveSpeedRate??this.throwable?.profile?.moveSpeedRate??WEAPON_MOVE_RATES[this.weapon];}
   // Explicit S5 host policy: a non-idle weapon runtime owns an action.
   // Native body eligibility and independently transferred projectiles differ.
@@ -632,7 +640,9 @@ export class Controller {
       if(this.wallAction.timeMs>TUNING.wallFlightMs)this.wallAction={...this.wallAction,phase:'fall',timeMs:0};
     }
     if(this.dash===0){this.dashPhase=null;this.dashMotion=null;}
-    this.coyote=this.grounded?.09:Math.max(0,this.coyote-dt);this.jumpBuffer=input.jump?.12:Math.max(0,this.jumpBuffer-dt);
+    // INPUT_JUMP is handled once, in the state current at input time: no
+    // buffered press and no jump after support is lost (CFallState).
+    this.coyote=this.grounded?1:0;this.jumpBuffer=input.jump?1:0;
     let x=input.x||0,z=input.z||0;const length=Math.hypot(x,z);if(length>1){x/=length;z/=length;}
     const moving=length>.01;
     const secondaryEntry=secondaryEntryRequested(this.weapon,input,!!this.attack);
@@ -855,19 +865,17 @@ export class Controller {
       this.events.push('dashcancel');
       if(Number.isFinite(input.facing))this.facing=input.facing;
     }
-    // Bridge-side capture 23:53:19 enters BOUNDJUMP at 6.630 s while
-    // descending in STATE_JUMP below its launch height (2776.9 < 2928.9).
-    // A normal jump remains eligible; a free fall does not gain that right.
-    // Keep the existing height bound for chained rebounds until measured.
-    const withinJumpHeight=this.jumpOriginY!==null&&this.position.y>=this.jumpOriginY;
     // Being airborne is not enough to start a walljump: running or sprinting
     // off support must first enter a normal jump. An existing walljump keeps
     // its rebound path so consecutive walljumps remain possible.
     // Space consumed by a dodge cancel is not a new manual takeoff. Test
     // dashCancel as well: the cancellation above has already cleared dash.
-    const wallJumpStateAllowed=!sprintingAtInput&&!dashCancel&&this.dash===0&&(this.jumpAirborne||this.normalJump||['flight','fall'].includes(this.wallAction?.phase));
-    const wallHeightAllowed=this.velocity.y>0||withinJumpHeight||(!this.wallAction&&this.normalJump);
-    const rebound=this.jumpBuffer>0&&!this.grounded&&wallHeightAllowed&&['flight','fall'].includes(this.wallAction?.phase)?this.findReboundWall():null;
+    // CJumpState::Input: a wall jump needs SUBSTATE_JUMP_MOVE_RISE/FALL, so a
+    // vertical jump (no direction at takeoff) never qualifies. No height bound.
+    const wallJumpStateAllowed=!sprintingAtInput&&!dashCancel&&this.dash===0&&(this.wallAction?this.wallAction.phase==='flight':(this.jumpAirborne||this.normalJump)&&!this.verticalJump);
+    // CBoundJumpState::Input: rebounds only in JUMP_RISE_A/B, once m_JumpTimeTA has
+    // advanced; the fall substate after the 500 ms flight cannot rebound.
+    const rebound=this.jumpBuffer>0&&!this.grounded&&this.wallAction?.phase==='flight'&&this.wallAction.timeMs>0?this.findReboundWall():null;
     // Keep the contact/direction checks for chained rebounds after the visual
     // flight phase too. Failure never falls back to a fresh wall entry.
     const facingWall=this.wallAction?rebound?.normal:(this.jumpBuffer>0&&!this.grounded?this.findFacingWall():null);
@@ -875,7 +883,7 @@ export class Controller {
     const backwardHeld=input.backwardHeld??((input.forward??(x*Math.sin(this.facing)+z*Math.cos(this.facing)))< -1e-6);
     // Wall entry and rebounds require forward/back held on this request.
     // Lateral-only Space remains a dodge, even against a valid wall contact.
-    const wallJump=(forwardHeld||backwardHeld)&&this.jumpBuffer>0&&!this.grounded&&wallJumpStateAllowed&&wallHeightAllowed&&facingWall&&!this.attack&&!this.wallJumpFailed;
+    const wallJump=(forwardHeld||backwardHeld)&&this.jumpBuffer>0&&!this.grounded&&wallJumpStateAllowed&&facingWall&&!this.attack&&!this.wallJumpFailed;
     if(airDashCancel&&!wallJump){
       this.jumpBuffer=0;this.coyote=0;this.airLocomotion=true;this.events.push('aircancel');
     }
@@ -911,6 +919,8 @@ export class Controller {
         this.sprintBlocked=true;this.airLocomotion=false;this.events.push('jump');
         this.normalJump=true;this.jumpRecovery=null;
         this.jumpAirborne=true;
+        // CJumpState m_bVerticalJump: no goal direction at takeoff.
+        this.verticalJump=!moving;
         if(plasmaSlash){
           const lower=this.plasmaLowerHistory[this.attack.kind];lower.mode='air';lower.landingMs=0;
           this.attack.lowerJump={startMs:this.attack.timeMs};
@@ -1197,10 +1207,15 @@ export class Controller {
         // the fall follows held directions and stops on release, without drift.
         const airCutSpeed=speed*CUT_MOVE_RATE*(1+SOURCE_MOVEMENT.jumpMoveRate);
         this.velocity.x=x*airCutSpeed;this.velocity.z=z*airCutSpeed;
-      }else if((this.grounded||this.ledgeFall)&&!this.attack&&!this.wallAction){
+      }else if(this.grounded&&!this.attack&&!this.wallAction){
         // CRunState::Tick 0x6352A8–0x6353A5 applies direction * speed * dt.
         // Ground locomotion adds no acceleration or braking tail of its own.
         this.velocity.x=target.x;this.velocity.z=target.z;
+      }else if(!this.attack){
+        // CFallState::FixedUpdate: goalDir * GetMoveSpeedMax() * dt,
+        // with no directional rate and no acceleration (ledge falls, air
+        // cancels, dodge/sprint exits and failed wall jumps all fall here).
+        this.velocity.x=x*speed;this.velocity.z=z*speed;
       }else{
         this.velocity.x=approach(this.velocity.x,target.x,acceleration*dt);this.velocity.z=approach(this.velocity.z,target.z,acceleration*dt);
       }
@@ -1222,11 +1237,15 @@ export class Controller {
     const dropTerminal=this.attack?.dropApplied&&!(this.attack.profile.dropTerminalInRecovery===false&&this.attack.phase==='recovery');
     const terminal=dropTerminal?meleeDropVelocity(this.attack,this.facing).y:this.katanaAirFall?meleeDropVelocity({profile:MELEE.katana.air,delayDropApplied:true},this.facing).y:-TUNING.terminal;
     this.velocity.y=Math.max(terminal,this.velocity.y);
+    // IActor::GetMaxGravityVelocity, read again by the grounded probe.
+    this.maxGravityVelocity=terminal;
     const wasGrounded=this.grounded;
     // Station 2 train capture: after the 500 ms flight phase, native movement
     // adds input-driven travel without changing the stored rebound impulse.
     // Keep it out of velocity so holding a key cannot accumulate acceleration.
     const wallControl=this.wallAction?.phase==='fall'&&!this.grounded&&!this.airLocomotion&&!this.attack&&this.dash===0;
+    // CBoundJumpState launch velocity is the actor m_vVelocity (UpdateGravity).
+    this.physicalHorizontal=['flight','fall'].includes(this.wallAction?.phase)&&!this.airLocomotion;
     // Current constant_info.xml explicitly maps GameTempo28 to jump_move_rate.
     // FREE=1 preserves the measured profile; retain the native factor itself.
     const wallControlSpeed=TUNING.walk*this.weaponMoveRate/WEAPON_MOVE_RATES.dagger*SOURCE_MOVEMENT.jumpMoveRate;
@@ -1287,120 +1306,87 @@ export class Controller {
     this.state=this.dash>0?(this.grounded?'dash':'airdash'):this.attack?this.attack.type:this.wallAction?(this.wallAction.phase==='fail'?'wallfail':'walljump'):!this.grounded?(this.velocity.y>0?'jump':'fall'):this.jumpRecovery?'landing':moving?(this.sprinting&&this.energy>0?'sprint':'run'):'idle';
     return this.events;
   }
+  // CJumpState::Input: the last found collision, then actorDir.Dot(-n) > 0.2.
   findFacingWall(){
-    // Probe the same surface used by movement, including non-axis-aligned walls.
-    const p=this.position,forward={x:Math.sin(this.facing),z:Math.cos(this.facing)};
-    const hit=this.collision.sweep({x:p.x,y:p.y+TUNING.height/2,z:p.z},{x:forward.x*CONTACT.wallProbe,y:0,z:forward.z*CONTACT.wallProbe});
     this.wallContact=null;
-    const wallNormal=hit?.wallNormal;
-    if(!wallNormal||Math.abs(wallNormal.y)>=.5)return null;
-    const length=Math.hypot(wallNormal.x,wallNormal.z),normal={x:wallNormal.x/length,z:wallNormal.z/length};
-    // CJumpState 0x6267D1–0x626985 uses a signed dot, unlike rebound.
-    if(normal.x*forward.x+normal.z*forward.z>=-WALL_REBOUND_MIN_DOT)return null;
-    this.wallContact={point:hit.point.clone(),normal:hit.surfaceNormal.clone()};
+    const wall=this.wallCollisionContact();if(!wall)return null;
+    const forward={x:Math.sin(this.facing),z:Math.cos(this.facing)},normal=wall.normal;
+    if(!(-(forward.x*normal.x+forward.z*normal.z)>WALL_REBOUND_MIN_DOT))return null;
+    this.wallContact=wallContactView(wall);
     return normal;
   }
+  // CBoundJumpState::Input: same contact rule with ABS(dot) > 0.2. The wall-jump
+  // m_vVelocity stays unclipped, so velocity is the incoming travel.
   findReboundWall(){
-    // CBoundJumpState handler 0x608903: actor facing vs horizontal wall
-    // normal, absolute dot strictly greater than native float constant 26.
-    const action=this.wallAction,p=this.position;
-    const incoming=action.reboundIncoming||this.velocity;
-    const length=Math.hypot(incoming.x,incoming.z);
-    const directions=[];
-    if(action.reboundNormal)directions.push({x:-action.reboundNormal.x,z:-action.reboundNormal.z});
-    if(length>1e-8)directions.push({x:incoming.x/length,z:incoming.z/length});
-    for(const direction of directions){
-      const hit=this.collision.sweep({x:p.x,y:p.y+TUNING.height/2,z:p.z},{x:direction.x*CONTACT.wallProbe,y:0,z:direction.z*CONTACT.wallProbe});
-      const wallNormal=hit?.wallNormal;
-      if(!wallNormal||Math.abs(wallNormal.y)>=.5)continue;
-      const n=Math.hypot(wallNormal.x,wallNormal.z),normal={x:wallNormal.x/n,z:wallNormal.z/n};
-      if(incoming.x*normal.x+incoming.z*normal.z>=-1e-8)continue;
-      const facingDot=Math.sin(this.facing)*normal.x+Math.cos(this.facing)*normal.z;
-      if(Math.abs(facingDot)<=WALL_REBOUND_MIN_DOT)continue;
-      this.wallContact={point:hit.point.clone(),normal:hit.surfaceNormal.clone()};
-      // Rebound launch follows the pre-collision trajectory, not mouse yaw.
-      return {normal,incomingFacing:Math.atan2(incoming.x,incoming.z)};
-    }
-    return null;
+    const wall=this.wallCollisionContact();if(!wall)return null;
+    const normal=wall.normal,facingDot=Math.sin(this.facing)*normal.x+Math.cos(this.facing)*normal.z;
+    if(!(Math.abs(facingDot)>WALL_REBOUND_MIN_DOT))return null;
+    this.wallContact=wallContactView(wall);
+    const incoming=this.velocity,length=Math.hypot(incoming.x,incoming.z);
+    // Rebound launch follows the pre-collision trajectory, not mouse yaw.
+    return {normal,incomingFacing:length>1e-8?Math.atan2(incoming.x,incoming.z):this.facing};
   }
   move(dt,extraHorizontal={x:0,z:0},freeTravelMargin=0,verticalSeconds=dt) {
     if(this.nativeCollisionMovement)return this.moveWithNativeCollisions(dt,extraHorizontal,verticalSeconds);
-    if(this.staticContactMovement)return this.moveWithNativeCollisions(dt,extraHorizontal,verticalSeconds,this.staticContactMovement);
-    if(this.events.includes('jump'))this.collision.edgeSupportKey=null;
-    this.collision.edgeSupportUsed=false;
-    const p=this.position,v=this.velocity,halfHeight=TUNING.height/2,supported=this.grounded;
-    const horizontal={x:(v.x+extraHorizontal.x)*dt,y:0,z:(v.z+extraHorizontal.z)*dt};
-    const start={x:p.x,y:p.y+halfHeight,z:p.z};
-    const horizontalOptions={freeTravelMargin};
-    let motion=this.collision.move(start,horizontal,horizontalOptions),stepped=false;
-    const stepHeight=this.world.stepHeight||0,walkableY=stepHeight?.3:CONTACT.groundNormalY,horizontalLength=Math.hypot(horizontal.x,horizontal.z);
-    // Explicitly scoped to the audited Azit source geometry. Its real .436m
-    // stair risers exceed the old frame-distance snap, causing false airborne
-    // intervals even while the ellipsoid touches a tread/nose. Other host
-    // maps and the complete source movement route keep their current policy.
-    const sourceLowerSupport=this.world.sourceContract?.key==='MAPNAME_AZIT';
-    // Narrow designated ledges support the active sprint, not an idle/walking
-    // actor. Use this tick's state for gravity, stepping AND snap on release.
-    const supportOptions={stopOnGround:true,groundNormalY:walkableY,supportDepth:Math.max(stepHeight,CONTACT.snapBase),allowEdgeSupport:this.sprinting,nativeDownwardSupport:true,nativeLowerSupport:sourceLowerSupport};
-    if(supported&&v.y<=0&&stepHeight>0&&horizontalLength>.001&&motion.contacts.some(c=>Math.abs(c.normal.y)<CONTACT.groundNormalY)){
-      // A station stair riser is 0.462 units tall. Try a bounded upward move,
-      // then the original horizontal move, and accept it only on walkable floor.
-      const lift=this.collision.move(start,{x:0,y:stepHeight,z:0});
-      if(lift.position.y>=start.y+stepHeight-.01){
-        const raised=this.collision.move(lift.position,horizontal,horizontalOptions);
-        const progress=point=>((point.x-start.x)*horizontal.x+(point.z-start.z)*horizontal.z)/horizontalLength;
-        if(progress(raised.position)>progress(motion.position)+.02){
-          const drop=this.collision.move(raised.position,{x:0,y:-stepHeight-.1,z:0},supportOptions);
-          const feet=drop.position.y-halfHeight;
-          if(drop.contacts.some(c=>c.groundSupport)&&feet>=p.y-.05&&feet<=p.y+stepHeight+.05){
-            motion={...raised,position:drop.position};stepped=true;
-          }
-        }
+    return this.moveBody(dt,extraHorizontal,verticalSeconds);
+  }
+  // CActor::FixedUpdate: CActor::UpdateGravity, then the current state's
+  // horizontal CActor::Move. Wall-jump X/Z belongs to the actor's m_vVelocity
+  // and moves inside UpdateGravity; every other S5 X/Z is a state Move.
+  // The native "free travel" epsilon is part of CollideWith, so the dodge
+  // freeTravelMargin argument is not applied a second time here.
+  moveBody(dt,extraHorizontal,verticalSeconds){
+    const body=this.collisionBody,p=this.position,v=this.velocity;
+    // Positions written outside movement are CActor::MoveForce placements.
+    // S5 spawns/teleports are floor-projected, unlike native spawn markers: a
+    // grounded placement gets the gap the solver itself rests at (radius.y * eps),
+    // otherwise a tangent start counts as embedded and skips the face test.
+    if(p.x!==body.position.x||p.y!==body.position.y||p.z!==body.position.z)
+      body.setPosition(this.grounded?{x:p.x,y:p.y+body.radii.y*ACTOR_COLLISION.epsilon,z:p.z}:p);
+    if(!this.grounded&&this.verticalState==='normal')this.verticalState=v.y>0?'rise':'fall';
+    const physical=this.physicalHorizontal;
+    body.landing=false;
+    const oldY=body.position.y;
+    if(this.verticalState==='normal'){
+      actorMove(body,{x:0,y:this.maxGravityVelocity*dt,z:0});
+      if(!body.landing&&body.position.y-oldY<0){
+        this.verticalState='fall';
+        v.y=this.maxGravityVelocity*.1;
+        this.events.push('levitate');
       }
+    }else{
+      actorMove(body,{x:physical?v.x*dt:0,y:v.y*verticalSeconds,z:physical?v.z*dt:0});
+      if(this.verticalState==='rise'){if(v.y<0||body.position.y-oldY<0)this.verticalState='fall';}
+      else if(body.landing)this.verticalState='normal';
     }
-    // Separate gravity/support from locomotion: gravity must not cause a slow
-    // sideways drift while idle on a walkable ramp. These thresholds are tuning
-    // assumptions, not values recovered from the original runtime.
-    let verticalDisplacement=v.y*verticalSeconds;
-    if(supported&&v.y<=0&&this.collision.queryActorContacts){
-      // Source526D00 probes downward at terminal speed while grounded. Apply
-      // that body-support path only over a currently observed player body;
-      // ordinary legacy world movement retains its existing gravity/snap.
-      const body=this.collision.sweep(motion.position,{x:0,y:-2*ACTOR_CONTACT_MARGIN*halfHeight,z:0},{actorBodies:true});
-      if(body?.actorBody&&body.groundSupport)verticalDisplacement=-TUNING.terminal*verticalSeconds;
-    }
-    let vertical=this.collision.move(motion.position,{x:0,y:verticalDisplacement,z:0},supportOptions);
-    let ground=stepped||v.y<=0&&vertical.contacts.some(c=>c.groundSupport);
-    if(!ground&&supported&&v.y<=0){
-      // Query only after a supported, nonascending move. A bounded REAL
-      // contact may continue support down a stair; a missed probe leaves both
-      // position and ballistic gravity intact (no timer or virtual floor).
-      const snap=Math.max(this.world.groundSnap||0,CONTACT.snapBase+horizontalLength*CONTACT.snapTravelRate,
-        sourceLowerSupport?NATIVE_LOWER_SUPPORT_GAP*halfHeight:0);
-      const hit=this.collision.sweep(vertical.position,{x:0,y:-snap,z:0},{actorBodies:true});
-      const atHit=hit?{x:vertical.position.x,y:hit.actorBody?hit.preSlide[1]*this.collision.radii.y:vertical.position.y-snap*hit.time,z:vertical.position.z}:null;
-      if(hit&&this.collision.supportsGround(hit,atHit,walkableY,supportOptions.supportDepth,supportOptions.allowEdgeSupport,supportOptions.nativeDownwardSupport,supportOptions.nativeLowerSupport)){vertical.position.y=atHit.y;ground=true;}
-    }
-    if(ground&&!this.collision.edgeSupportUsed)this.collision.edgeSupportKey=null;
-    this.grounded=ground;
-    this.resolveMovementWalls(motion.contacts,walkableY);
-    // A ceiling constrains the displacement, not the ballistic velocity.
-    // Keep ordinary gravity advancing the jump until its natural apex, so
-    // touching a roof does not start the fall early or remove ascent when
-    // moving beyond its edge. Real floor support still ends vertical motion.
-    if(ground)v.y=0;
-    p.x=vertical.position.x;p.y=vertical.position.y-halfHeight;p.z=vertical.position.z;
-    // Only round numerical zero, never snap a real height to an arena-specific
-    // floor or evaluate a separate ramp height function.
-    for(const axis of ['x','y','z']){if(Math.abs(p[axis])<CONTACT.epsilon)p[axis]=0;if(Math.abs(v[axis])<CONTACT.epsilon)v[axis]=0;}
+    actorMove(body,{x:((physical?0:v.x)+extraHorizontal.x)*dt,y:0,z:((physical?0:v.z)+extraHorizontal.z)*dt});
+    this.grounded=this.verticalState==='normal';
+    if(this.grounded)v.y=0;
+    Object.assign(p,body.getPosition());
+    this.updateWallCollisionContact();
+  }
+  // Last found collision of the latest Update, as read by CJumpState::Input
+  // and CBoundJumpState::Input (type, 150-unit height window, |n.y| < 0.5).
+  wallCollisionContact(){
+    const body=this.collisionBody,type=body.foundCollisionType();
+    if(type===0||(type&TYPE_ACTOR))return null;
+    const center=body.position.y+body.offset.y,contact=body.foundCollisionPosition();
+    if(!(150*SCN_SCENE_SCALE>Math.abs(center-contact.y)))return null;
+    const n=body.foundCollisionNormal();
+    if(!(.5>Math.abs(n.y)))return null;
+    const length=Math.hypot(n.x,n.z);if(length===0)return null;
+    return {normal:{x:n.x/length,z:n.z/length},point:contact};
+  }
+  updateWallCollisionContact(){
+    const wall=this.wallCollisionContact();
+    this.wall=wall?wall.normal:null;
   }
   moveWithNativeCollisions(dt,extraHorizontal,verticalSeconds,movement=this.nativeCollisionMovement){
     const p=this.position,v=this.velocity;
     const frame=movement.move({position:p,deltaSeconds:dt,grounded:this.grounded,
       horizontal:{x:(v.x+extraHorizontal.x)*dt,y:0,z:(v.z+extraHorizontal.z)*dt},
       vertical:{x:0,y:v.y*verticalSeconds,z:0}});
-    if(movement===this.nativeCollisionMovement)this.nativeCollisionMovementFrame=frame;
-    else this.staticContactMovementFrame=frame;
+    this.nativeCollisionMovementFrame=frame;
     if(!frame.qualified)throw new Error('Native collision movement refused: '+frame.reason);
     // The full source operation owns contact response, support, correction
     // and last-safe restoration. Do not run the old step/snap/edge solver on

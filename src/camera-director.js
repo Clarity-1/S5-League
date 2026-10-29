@@ -28,10 +28,10 @@ export class CameraDirector{
  keyDown(code){this.held.add(code);}
  keyUp(code){this.held.delete(code);}
  clear(){this.held.clear();this.freeVelocity.set(0,0,0);}
- update(camera,{player,yaw,pitch,distance,obstacles=[],dt=0}){
+ update(camera,{player,yaw,pitch,distance,obstacles=[],collisionWorld=null,dt=0}){
   if(this.free)return this.updateFree(camera,{yaw,pitch,dt});
   const oldPosition=camera.position.clone(),oldQuaternion=camera.quaternion.clone();
-  this.followRig.update(camera,player,yaw,pitch,distance,obstacles);
+  this.followRig.update(camera,player,yaw,pitch,distance,obstacles,{dt,collisionWorld});
   if(this.cinematic){
    const desiredPosition=camera.position.clone(),desiredQuaternion=camera.quaternion.clone();
    camera.position.copy(oldPosition).lerp(desiredPosition,damp(4,dt));

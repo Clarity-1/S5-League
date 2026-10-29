@@ -9,9 +9,11 @@ export function createInventoryAvatarPreview(container,{portrait=false,rotatable
  if(byContainer.has(container))return byContainer.get(container);
  const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(28,332/387,.01,100);
  // Adapted S5 presentation. Native inventory lighting/FOV are not recovered.
- const lobby=presentation==='lobby';
- scene.add(new THREE.AmbientLight(lobby?0xe4edff:0xffffff,lobby?1.35:2));const light=new THREE.DirectionalLight(lobby?0xffead4:0xffffff,lobby?2:2.5);light.position.set(lobby?-3:2,4,5);scene.add(light);
- if(lobby){const fill=new THREE.DirectionalLight(0xb7dcff,.65);fill.position.set(4,2,-3);scene.add(fill);}
+ // Every preview (lobby, inventory, portrait) shares the lobby key/fill rig:
+ // the former inventory rig (white ambient 2 + key 2.5, no tone mapping)
+ // washed the toon materials out to near white.
+ scene.add(new THREE.AmbientLight(0xe4edff,1.35));const light=new THREE.DirectionalLight(0xffead4,2);light.position.set(-3,4,5);scene.add(light);
+ const fill=new THREE.DirectionalLight(0xb7dcff,.65);fill.position.set(4,2,-3);scene.add(fill);
  const rotation=rotatable?installAvatarPreviewRotation(container):null;
  let renderer=null,model=null,size='',disposed=false;
  function release(){model?.dispose();model=null;size='';}

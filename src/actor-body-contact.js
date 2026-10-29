@@ -25,9 +25,14 @@ export function bindCombatBodyContacts(records){
     bounds:args.bounds??nativeStaticSweepBounds({...args,float47:1}),initialContact,arithmeticProfile,float47:1,float48:-1,integer3:3});
   };
   collision.queryActorContacts=(...args)=>actor.bodyContactQuery?.(...args);
+  // CDynamicCollisionChecker::CheckCollisionByActor: enabled actors' collision objects.
+  collision.actorCollisionBodies=()=>record.health.dead?[]:records.filter(other=>other.actor!==actor&&!other.health.dead&&other.actor.world===actor.world&&other.actor.collision).map(other=>{
+   const r=other.actor.collision.radii;
+   return {position:{...other.actor.position},offset:{x:0,y:r.y,z:0},radii:{x:r.x,y:r.y,z:r.z}};
+  });
  }
 }
 
 export function releaseCombatBodyContacts(records){
- for(const {actor}of records){actor.bodyContactQuery=null;if(actor.collision)actor.collision.queryActorContacts=null;}
+ for(const {actor}of records){actor.bodyContactQuery=null;if(actor.collision){actor.collision.queryActorContacts=null;actor.collision.actorCollisionBodies=null;}}
 }

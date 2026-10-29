@@ -29,19 +29,25 @@ export function buildBlenderWalkExperiment(data,bones,clips,reference,sex){
 export function buildBlenderBoldWalks(bundle,bones,clips,reference,sex){
   if(bundle.format!=='s5-blender-walk-bold-bundle-v1'||bundle.sex!==sex||bundle.clips?.length!==8)throw Error('Invalid Blender V2 bundle');
   const directions=new Set();
+  const authored=new Set();
   const result=bundle.clips.map(data=>{
-    const direction=data.direction;
-    if(!SPY_DAGGER_DIRECTIONS.includes(direction)||directions.has(direction))throw Error('Unexpected Blender V2 direction');
+    if(!SPY_DAGGER_DIRECTIONS.includes(data.direction)||authored.has(data.direction))throw Error('Unexpected Blender V2 direction');
+    authored.add(data.direction);
+    // Each clip was authored over an exact source pair. File it under the
+    // direction that plays that pair now: the native mapping moved the four
+    // diagonal pairs, so the authored diagonal labels are mirrored.
+    const direction=SPY_DAGGER_DIRECTIONS.find(d=>data.source?.upper===SPY_DAGGER_LOCOMOTION.run[d]+':upper'&&data.source?.lower===SPY_DAGGER_LOCOMOTION.runLower[d]+':lower');
+    if(!direction)throw Error('Blender V2 source mapping differs');
+    if(directions.has(direction))throw Error('Unexpected Blender V2 direction');
     directions.add(direction);
-    const upper=SPY_DAGGER_LOCOMOTION.run[direction],lower=SPY_DAGGER_LOCOMOTION.runLower[direction];
-    if(data.source?.upper!==upper+':upper'||data.source?.lower!==lower+':lower')throw Error('Blender V2 source mapping differs');
-    return buildWalkClip(data,bones,clips,reference,sex,{format:'s5-blender-walk-bold-clip-v1',name:blenderBoldClip(direction),upper,lower});
+    return buildWalkClip(data,bones,clips,reference,sex,{format:'s5-blender-walk-bold-clip-v1',authoredName:blenderBoldClip(data.direction),name:blenderBoldClip(direction),
+      upper:SPY_DAGGER_LOCOMOTION.run[direction],lower:SPY_DAGGER_LOCOMOTION.runLower[direction]});
   });
   return result;
 }
 
 function buildWalkClip(data,bones,clips,reference,sex,source){
-  if(data.format!==source.format||data.name!==source.name||data.sex!==sex)throw Error('Invalid Blender walk experiment');
+  if(data.format!==source.format||data.name!==(source.authoredName??source.name)||data.sex!==sex)throw Error('Invalid Blender walk experiment');
   const upper=clips.find(c=>c.name===source.upper),lower=clips.find(c=>c.name===source.lower);
   if(!upper||!lower||Math.abs(upper.duration-data.duration)>1e-6||Math.abs(lower.duration-data.duration)>1e-6)throw Error('Blender walk source duration mismatch');
   if(!data.times?.length||data.times[0]!==0||Math.abs(data.times.at(-1)-data.duration)>1e-6||
@@ -57,7 +63,7 @@ function buildWalkClip(data,bones,clips,reference,sex,source){
     }
   }
   const clip=new THREE.AnimationClip(source.name,data.duration,[...tracks.values()]);
-  clip.userData={experimental:true,authoringTool:'Blender',sourceUpper:source.upper,sourceLower:source.lower,validated:false};
+  clip.userData={experimental:true,authoringTool:'Blender',sourceUpper:source.upper,sourceLower:source.lower,authoredName:data.name,validated:false};
   return clip;
 }
 

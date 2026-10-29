@@ -186,3 +186,8 @@
  & .s5-settings-header{padding-top:16px;padding-bottom:16px}
  & .s5-settings-footer{padding-block:12px}
 }}
+/* In-game Settings over the paused match: no lobby backdrop or navigation (the
+   entry flow refuses lobby routes while playing); the view keeps Close/Confirm. */
+body.ingame-settings #welcome.s5-entry-host .s5-lobby{background:transparent}
+body.ingame-settings #welcome.s5-entry-host .s5-lobby[data-section=settings] .s5-lobby-content{background:#0b121840;backdrop-filter:none}
+body.ingame-settings #welcome.s5-entry-host :is(.s5-lobby-navigation,.s5-lobby-footer){display:none}

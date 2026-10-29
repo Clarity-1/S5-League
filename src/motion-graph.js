@@ -22,6 +22,8 @@ export {RUN_CLIPS,ATTACK_LEGS} from './direction-clips.js';
 // S5Runtime CFastRunState 0x617949–0x617BAA, local normal sprint: CAnimParam
 // playback multiplies the Lua rate 1 by native constant 0.5 (0x14C908C).
 export const SPRINT_ANIMATION_SPEED=.5;
+// ActorState_FastRun: SetAnim("00068", 0, 200, ...): 200 blend ticks.
+export const SPRINT_BLEND_SECONDS=200/4800;
 // Native parameter read + control-flow evidence, 2026-09-26:
 // docs/s5runtime-landing-animation-evidence.json. No extra recovery clip.
 export const LANDING_ROLL_SPEED=.8;
@@ -133,7 +135,7 @@ export class MotionGraph {
       return {...base,...wallJumpPose(c.wallAction,this.serial)};
     }
     if(!c.grounded){
-      if(c.sprinting)return this.sprintPose({...base,fade:.04});
+      if(c.sprinting)return this.sprintPose({...base,fade:SPRINT_BLEND_SECONDS});
       const intent=c.moveIntent||c.velocity,intending=Math.hypot(intent.x,intent.z)>.01;
       if(c.airLocomotion&&(moving||intending)){
         const airDirection=intending?localDirection(intent.x,intent.z,c.facing):direction;
@@ -183,7 +185,7 @@ export class MotionGraph {
       const clip=meleeDefinition(c.weapon,c.sigmaTransformed,c.sex)?.idle||'SN002';
       return idle?{...base,clip:idle,fade:Math.max(.18,base.fade)}:{...base,clip,fade:clip==='SN002'?DAGGER_IDLE_BLEND_SECONDS:['plasma','counter'].includes(c.weapon)?PLASMA_LOCOMOTION_BLEND_SECONDS:c.weapon==='breaker'?300/4800:base.fade};
     }
-    if(c.state==='sprint')return this.sprintPose(base);
+    if(c.state==='sprint')return this.sprintPose({...base,fade:SPRINT_BLEND_SECONDS});
     if(BLENDER_WALK_ENABLED&&this.runStyle===BLENDER_BOLD_STYLE&&c.weapon==='dagger')return {
       ...base,clip:blenderBoldClip(direction),lower:blenderBoldClip(direction),
       fade:1000/4800,speed:Math.max(.3,speed/TUNING.animationWalk),
@@ -203,6 +205,8 @@ export class MotionGraph {
       ...base,clip:smoothWalkName(runClip),lower:smoothWalkName(lower),
       fade:1000/4800,speed:Math.max(.3,speed/TUNING.animationWalk),
     };
-    return {...base,clip:runClip,...(lower?{lower,fade:1000/4800}:{}),speed:Math.max(.3,speed/TUNING.animationWalk)};
+    // CRunState::SetAnimation: GetMoveSpeedMax() / actor_default_animation_move_speed
+    // for every direction; the side/back speed rates do not slow the cycle.
+    return {...base,clip:runClip,...(lower?{lower,fade:1000/4800}:{}),speed:Math.max(.3,(c.moveSpeedMax??speed)/TUNING.animationWalk)};
   }
 }

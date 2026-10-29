@@ -9,11 +9,12 @@
     "preview": "vite preview --host 127.0.0.1",
     "wasm:build": "node tools/build-native-bool-wasm.mjs",
     "wasm:check": "node tools/build-native-bool-wasm.mjs --check",
-    "test:wasm": "node --test tests/native-collision-bool-wasm.test.mjs"
+    "test:wasm": "node --test tests/native-collision-bool-wasm.test.mjs",
+    "test:physics": "node --test tests/actor-physics.test.mjs tests/locomotion-animation.test.mjs tests/follow-camera.test.mjs tests/follow-shadow.test.mjs"
   },
   "dependencies": {
     "three": "0.186.0",
-    "vite": "8.3.0"
+    "vite": "8.3.5"
   },
   "devDependencies": {
     "wabt": "1.0.39"

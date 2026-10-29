@@ -10,7 +10,6 @@ export async function createStation2Modular(scene,layout=STATION2_LAYOUT){
  const loaded=performance.now();
  const world=await createModularWorld(scene,layout,prefabs);
  world.nativeMapId=66;
- world.staticContactResponse='source';
  if(prefabs.has('train'))installTrainWindowSupports(world,prefabs.get('train'));
  if(layout.ball){const ball=await createFumbi(await readAsset('/assets/s5runtime/maps/fumbi.json'));ball.scale.set(.006,.006,-.006);world.attach(ball,layout.ball);world.fumbi=ball;}
  world.station2Performance={sourceLoadMs:loaded-started,sourceBuildMs:performance.now()-loaded};
